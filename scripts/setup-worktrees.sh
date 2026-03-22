@@ -1,42 +1,90 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 REPO_ROOT="${1:-$(pwd)}"
+TARGET_ROOT="${2:-}"
+
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"
-TEAM_ROOT="${2:-${REPO_ROOT}-team}"
 
-mkdir -p "$TEAM_ROOT"
-cd "$REPO_ROOT"
-
-ensure_branch() {
-  local branch="$1"
-  if git show-ref --verify --quiet "refs/heads/$branch"; then
-    :
-  else
-    git branch "$branch"
-  fi
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
 }
 
-create_worktree() {
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+is_git_repo() {
+  git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+worktree_registered() {
+  local path="$1"
+  git -C "$REPO_ROOT" worktree list --porcelain | awk '/^worktree /{print $2}' | grep -Fx "$path" >/dev/null 2>&1
+}
+
+ensure_branch_exists() {
+  local branch="$1"
+  if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
+    return 0
+  fi
+  git -C "$REPO_ROOT" branch "$branch"
+}
+
+ensure_worktree() {
   local name="$1"
   local branch="$2"
-  local path="$TEAM_ROOT/$name"
-  ensure_branch "$branch"
-  if [ -d "$path/.git" ] || git worktree list | grep -q "[[:space:]]$path$"; then
-    echo "worktree exists: $path"
-  else
-    git worktree add "$path" "$branch"
+  local path="$TARGET_ROOT/$name"
+
+  echo "==> Ensuring worktree: $name"
+  echo "    branch: $branch"
+  echo "    path:   $path"
+
+  ensure_branch_exists "$branch"
+
+  # Case 1: directory exists and is already a git worktree
+  if [ -d "$path" ] && is_git_repo "$path"; then
+    echo "    existing git worktree found, keeping it"
+    return 0
   fi
+
+  # Case 2: git already knows this worktree path
+  if worktree_registered "$path"; then
+    echo "    worktree registered in git metadata"
+    if [ ! -d "$path" ]; then
+      echo "    directory missing, repairing registration"
+      git -C "$REPO_ROOT" worktree repair "$path" 2>/dev/null || true
+    fi
+    return 0
+  fi
+
+  # Case 3: plain leftover directory exists
+  if [ -e "$path" ]; then
+    echo "    removing stale directory: $path"
+    rm -rf "$path"
+  fi
+
+  git -C "$REPO_ROOT" worktree add "$path" "$branch"
 }
 
-create_worktree lead feature/pvc-design-lead
-create_worktree brainstorm feature/pvc-design-brainstorm
-create_worktree platform feature/pvc-design-platform
-create_worktree review feature/pvc-design-review
+need_cmd git
 
-echo "Created or verified worktrees under: $TEAM_ROOT"
-printf '%s\n' \
-  "$TEAM_ROOT/lead" \
-  "$TEAM_ROOT/brainstorm" \
-  "$TEAM_ROOT/platform" \
-  "$TEAM_ROOT/review"
+is_git_repo "$REPO_ROOT" || die "not a git repository: $REPO_ROOT"
+
+if [ -z "$TARGET_ROOT" ]; then
+  TARGET_ROOT="$(dirname "$REPO_ROOT")/$(basename "$REPO_ROOT")-team"
+fi
+
+mkdir -p "$TARGET_ROOT"
+
+git -C "$REPO_ROOT" worktree prune
+
+ensure_worktree "lead"       "feature/pvc-design-lead"
+ensure_worktree "brainstorm" "feature/pvc-design-brainstorm"
+ensure_worktree "platform"   "feature/pvc-design-platform"
+ensure_worktree "review"     "feature/pvc-design-review"
+
+echo
+echo "Worktrees ready under: $TARGET_ROOT"
+git -C "$REPO_ROOT" worktree list
