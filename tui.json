@@ -1,0 +1,8 @@
+{
+  "$schema": "https://opencode.ai/tui.json",
+  "keybinds": {
+    "app.help": ["f1"],
+    "session.new": ["ctrl+n"],
+    "input.submit": ["enter"]
+  }
+}
